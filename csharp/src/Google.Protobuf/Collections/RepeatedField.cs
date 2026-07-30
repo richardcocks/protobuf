@@ -19,6 +19,9 @@ using System.Security;
 #if NET5_0_OR_GREATER
 using System.Runtime.CompilerServices;
 #endif
+#if GOOGLE_PROTOBUF_SIMD
+using System.Runtime.Intrinsics;
+#endif
 
 namespace Google.Protobuf.Collections
 {
@@ -201,6 +204,14 @@ namespace Google.Protobuf.Collections
             int fixedSize = codec.FixedSize;
             if (fixedSize == 0)
             {
+                // A plain uint32 varint's encoded length is a pure function of the
+                // value, so the run can be sized without the per-element delegate --
+                // and vectorised, since it reduces to four threshold comparisons.
+                if (codec.IsPlainUInt32Varint)
+                {
+                    return SumUInt32VarintSizes((uint[]) (object) array, count);
+                }
+
                 var calculator = codec.ValueSizeCalculator;
                 int tmp = 0;
                 for (int i = 0; i < count; i++)
@@ -213,6 +224,52 @@ namespace Google.Protobuf.Collections
             {
                 return fixedSize * Count;
             }
+        }
+
+        /// <summary>
+        /// Totals the encoded lengths of a packed uint32 run. Equivalent to summing
+        /// <see cref="CodedOutputStream.ComputeUInt32Size"/> over the elements.
+        /// </summary>
+        private static int SumUInt32VarintSizes(uint[] values, int count)
+        {
+            uint total = 0;
+            int i = 0;
+
+#if GOOGLE_PROTOBUF_SIMD
+            if (Vector256.IsHardwareAccelerated && count >= Vector256<uint>.Count)
+            {
+                ref uint start = ref MemoryMarshal.GetArrayDataReference(values);
+                Vector256<uint> one = Vector256.Create(1u);
+                Vector256<uint> t1 = Vector256.Create(1u << 7);
+                Vector256<uint> t2 = Vector256.Create(1u << 14);
+                Vector256<uint> t3 = Vector256.Create(1u << 21);
+                Vector256<uint> t4 = Vector256.Create(1u << 28);
+                Vector256<uint> acc = Vector256<uint>.Zero;
+
+                for (; i <= count - Vector256<uint>.Count; i += Vector256<uint>.Count)
+                {
+                    Vector256<uint> v = Vector256.LoadUnsafe(ref start, (nuint) i);
+
+                    // Each comparison yields all-ones when true, and subtracting
+                    // all-ones in wrapping unsigned arithmetic adds one, so this is
+                    // ComputeUInt32Size's threshold chain without the branches.
+                    acc += one
+                         - Vector256.GreaterThanOrEqual(v, t1)
+                         - Vector256.GreaterThanOrEqual(v, t2)
+                         - Vector256.GreaterThanOrEqual(v, t3)
+                         - Vector256.GreaterThanOrEqual(v, t4);
+                }
+
+                total = Vector256.Sum(acc);
+            }
+#endif
+
+            for (; i < count; i++)
+            {
+                total += (uint) CodedOutputStream.ComputeUInt32Size(values[i]);
+            }
+
+            return (int) total;
         }
 
         /// <summary>

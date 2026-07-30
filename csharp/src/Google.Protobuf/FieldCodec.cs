@@ -225,7 +225,7 @@ namespace Google.Protobuf
         /// <returns>A codec for the given tag.</returns>
         public static FieldCodec<uint> ForUInt32(uint tag, uint defaultValue)
         {
-            return new FieldCodec<uint>((ref ParseContext ctx) => ctx.ReadUInt32(), (ref WriteContext output, uint value) => output.WriteUInt32(value), CodedOutputStream.ComputeUInt32Size, tag, defaultValue);
+            return new FieldCodec<uint>((ref ParseContext ctx) => ctx.ReadUInt32(), (ref WriteContext output, uint value) => output.WriteUInt32(value), CodedOutputStream.ComputeUInt32Size, tag, defaultValue, isPlainUInt32Varint: true);
         }
 
         /// <summary>
@@ -643,6 +643,15 @@ namespace Google.Protobuf
         internal int FixedSize { get; }
 
         /// <summary>
+        /// Whether this codec encodes an unadorned uint32 varint, as produced by
+        /// <see cref="FieldCodec.ForUInt32(uint)"/>. This allows RepeatedField&lt;T&gt; to
+        /// take a bulk path for packed fields of this type. It cannot be inferred from
+        /// <typeparamref name="T"/> alone, because fixed32 is also a FieldCodec&lt;uint&gt;,
+        /// nor from <see cref="FixedSize"/> being zero, which is true of every varint.
+        /// </summary>
+        internal bool IsPlainUInt32Varint { get; }
+
+        /// <summary>
         /// Gets the tag of the codec.
         /// </summary>
         /// <value>
@@ -685,7 +694,8 @@ namespace Google.Protobuf
             ValueWriter<T> writer,
             Func<T, int> sizeCalculator,
             uint tag,
-            T defaultValue) : this(reader, writer, (ref ParseContext ctx, ref T v) => v = reader(ref ctx), (ref T v, T v2) => { v = v2; return true; }, sizeCalculator, tag, 0, defaultValue)
+            T defaultValue,
+            bool isPlainUInt32Varint = false) : this(reader, writer, (ref ParseContext ctx, ref T v) => v = reader(ref ctx), (ref T v, T v2) => { v = v2; return true; }, sizeCalculator, tag, 0, defaultValue, isPlainUInt32Varint)
         {
         }
 
@@ -708,13 +718,15 @@ namespace Google.Protobuf
             Func<T, int> sizeCalculator,
             uint tag,
             uint endTag,
-            T defaultValue)
+            T defaultValue,
+            bool isPlainUInt32Varint = false)
         {
             ValueReader = reader;
             ValueWriter = writer;
             ValueMerger = inputMerger;
             FieldMerger = valuesMerger;
             ValueSizeCalculator = sizeCalculator;
+            IsPlainUInt32Varint = isPlainUInt32Varint;
             FixedSize = 0;
             Tag = tag;
             EndTag = endTag;
