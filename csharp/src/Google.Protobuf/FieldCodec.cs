@@ -225,7 +225,7 @@ namespace Google.Protobuf
         /// <returns>A codec for the given tag.</returns>
         public static FieldCodec<uint> ForUInt32(uint tag, uint defaultValue)
         {
-            return new FieldCodec<uint>((ref ParseContext ctx) => ctx.ReadUInt32(), (ref WriteContext output, uint value) => output.WriteUInt32(value), CodedOutputStream.ComputeUInt32Size, tag, defaultValue, PackedUInt32SizeCalculator);
+            return new FieldCodec<uint>((ref ParseContext ctx) => ctx.ReadUInt32(), (ref WriteContext output, uint value) => output.WriteUInt32(value), CodedOutputStream.ComputeUInt32Size, tag, defaultValue, PackedUInt32SizeCalculator, isPlainUInt32Varint: true);
         }
 
         /// <summary>
@@ -728,6 +728,16 @@ namespace Google.Protobuf
         internal Func<T[], int, int> PackedSizeCalculator { get; }
 
         /// <summary>
+        /// Whether this codec encodes an unadorned uint32 varint, as produced by
+        /// <see cref="FieldCodec.ForUInt32(uint)"/>. This allows RepeatedField&lt;T&gt; to
+        /// take a bulk path when parsing packed fields of this type. It is a stronger
+        /// statement than <see cref="PackedSizeCalculator"/> being non-null, which merely
+        /// says the run can be sized in one call: decoding a run in bulk requires knowing
+        /// the exact encoding, not just that one exists.
+        /// </summary>
+        internal bool IsPlainUInt32Varint { get; }
+
+        /// <summary>
         /// Gets the tag of the codec.
         /// </summary>
         /// <value>
@@ -771,7 +781,8 @@ namespace Google.Protobuf
             Func<T, int> sizeCalculator,
             uint tag,
             T defaultValue,
-            Func<T[], int, int> packedSizeCalculator = null) : this(reader, writer, (ref ParseContext ctx, ref T v) => v = reader(ref ctx), (ref T v, T v2) => { v = v2; return true; }, sizeCalculator, tag, 0, defaultValue, packedSizeCalculator)
+            Func<T[], int, int> packedSizeCalculator = null,
+            bool isPlainUInt32Varint = false) : this(reader, writer, (ref ParseContext ctx, ref T v) => v = reader(ref ctx), (ref T v, T v2) => { v = v2; return true; }, sizeCalculator, tag, 0, defaultValue, packedSizeCalculator, isPlainUInt32Varint)
         {
         }
 
@@ -795,7 +806,8 @@ namespace Google.Protobuf
             uint tag,
             uint endTag,
             T defaultValue,
-            Func<T[], int, int> packedSizeCalculator = null)
+            Func<T[], int, int> packedSizeCalculator = null,
+            bool isPlainUInt32Varint = false)
         {
             ValueReader = reader;
             ValueWriter = writer;
@@ -803,6 +815,7 @@ namespace Google.Protobuf
             FieldMerger = valuesMerger;
             ValueSizeCalculator = sizeCalculator;
             PackedSizeCalculator = packedSizeCalculator;
+            IsPlainUInt32Varint = isPlainUInt32Varint;
             FixedSize = 0;
             Tag = tag;
             EndTag = endTag;

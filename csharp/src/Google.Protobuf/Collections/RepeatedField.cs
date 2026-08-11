@@ -138,6 +138,19 @@ namespace Google.Protobuf.Collections
                             }
                         }
                     }
+                    // The whole run must sit in the *current* buffer, not merely be
+                    // available across segments: this path slices the buffer directly,
+                    // unlike the fixed-size path above, whose reader refills as it goes.
+                    else if (codec.IsPlainUInt32Varint
+                             && length <= ctx.state.bufferSize - ctx.state.bufferPos
+                             && ctx.buffer[ctx.state.bufferPos + length - 1] < 0x80)
+                    {
+                        // A packed uint32 run that is wholly buffered and ends on a
+                        // varint boundary can be read without the per-element reader
+                        // delegate and without Add() rechecking capacity each time,
+                        // because the element count is known before decoding.
+                        AddPackedUInt32Entries(ref ctx, length);
+                    }
                     else
                     {
                         // Content is variable size so add until we reach the limit.
@@ -158,6 +171,71 @@ namespace Google.Protobuf.Collections
                     Add(reader(ref ctx));
                 } while (ParsingPrimitives.MaybeConsumeTag(ref ctx.buffer, ref ctx.state, tag));
             }
+        }
+
+        /// <summary>
+        /// Reads a contiguous packed uint32 run, sizing the backing array exactly once
+        /// rather than growing it as elements arrive. The caller must have established
+        /// that the entire run is present in the buffer and that it ends on a varint
+        /// boundary; otherwise the general loop applies.
+        /// </summary>
+        [SecuritySafeCritical]
+        private void AddPackedUInt32Entries(ref ParseContext ctx, int length)
+        {
+            ReadOnlySpan<byte> payload = ctx.buffer.Slice(ctx.state.bufferPos, length);
+
+            EnsureSize(count + CountVarintTerminators(payload));
+
+            // Taken after EnsureSize, which may have replaced the array.
+            uint[] target = (uint[]) (object) array;
+
+            int at = 0;
+            while (at < length)
+            {
+                uint value = 0;
+                int shift = 0;
+                byte b;
+                do
+                {
+                    b = payload[at++];
+                    // A value encoded in more than five bytes -- a negative int32
+                    // written to a uint32 field occupies ten -- discards the bits
+                    // above 32, as ParsingPrimitives.ParseRawVarint32 does.
+                    if (shift < 32)
+                    {
+                        value |= (uint) (b & 0x7F) << shift;
+                    }
+                    shift += 7;
+                } while (b >= 0x80);
+                target[count++] = value;
+            }
+
+            ctx.state.bufferPos += length;
+        }
+
+        /// <summary>
+        /// Counts the bytes with the continuation bit clear. Each varint ends on
+        /// exactly one such byte, so for a well-formed packed run this is the number
+        /// of elements it holds.
+        /// </summary>
+        /// <remarks>
+        /// SecuritySafeCritical because the assembly is marked
+        /// AllowPartiallyTrustedCallers, which makes methods security transparent by
+        /// default, and a transparent method may not touch ReadOnlySpan on .NET
+        /// Framework.
+        /// </remarks>
+        [SecuritySafeCritical]
+        private static int CountVarintTerminators(ReadOnlySpan<byte> payload)
+        {
+            int total = 0;
+            for (int i = 0; i < payload.Length; i++)
+            {
+                if (payload[i] < 0x80)
+                {
+                    total++;
+                }
+            }
+            return total;
         }
 
         /// <summary>
